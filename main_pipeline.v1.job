@@ -1,0 +1,79 @@
+#!/bin/bash --login
+#$ -cwd
+#$ -pe smp.pe 6 
+#$ -t 1-267
+#$ -N zpipe
+module load apps/binapps/anaconda3/2020.07
+module load tools/env/proxy2 
+module load apps/bioinf
+module load apps/binapps/gatk/4.1.8.0
+module load apps/samtools/1.4/gcc-4.8.5
+# 1-267
+
+PREFIX=`awk "NR==$SGE_TASK_ID" found.list`
+
+### PANGENOME GENERATION PIPELINE FOR HPC ###
+READ1=./initial_seq/${PREFIX}_1.fastq
+READ2=./initial_seq/${PREFIX}_2.fastq
+REF=GCF_000002655.1_ASM265v1_genomic.masked.fa
+
+
+
+mkdir $PREFIX
+
+### READ QC ###
+conda activate imperial
+trimmomatic PE -threads $NSLOTS ./${READ1} ./${READ2} \
+		${PREFIX}/${PREFIX}_1_qc.fastq ${PREFIX}/${PREFIX}_1_unqc.fastq \
+		${PREFIX}/${PREFIX}_2_qc.fastq ${PREFIX}/${PREFIX}_2_unqc.fastq \
+		ILLUMINACLIP:/mnt/iusers01/pb01/f99731hc/TruSeq3-PE.fa:2:40:15 TOPHRED33 LEADING:20 \
+		TRAILING:20 SLIDINGWINDOW:2:20 MINLEN:25 \
+		AVGQUAL:20
+		
+### ALIGN TO REF ###
+conda activate persist_env
+if [ ! -e $REF.pac ]
+then
+	bwa index $REF
+fi
+bwa mem -t $NSLOTS $REF ${PREFIX}/${PREFIX}_1_qc.fastq ${PREFIX}/${PREFIX}_2_qc.fastq > ${PREFIX}/$PREFIX.sam
+
+### VARIANT CALL ###
+# Convert SAM to BAM
+samtools view -S -b ${PREFIX}/$PREFIX.sam > ${PREFIX}/$PREFIX.bam
+# Sort BAM file
+samtools sort ${PREFIX}/$PREFIX.bam -o ${PREFIX}/$PREFIX.sorted.bam
+# Add groups for sorted BAM file
+gatk --java-options "-Xmx4G" AddOrReplaceReadGroups \
+       -I ${PREFIX}/$PREFIX.sorted.bam \
+       -O ${PREFIX}/$PREFIX.grouped.bam \
+       --RGID 4 \
+       --RGLB lib1 \
+       --RGPL ILLUMINA \
+       --RGPU unit1 \
+       --RGSM 20
+# Index the sorted BAM file
+samtools index ${PREFIX}/$PREFIX.grouped.bam
+
+# Run GATK
+gatk --java-options "-Xmx4G" HaplotypeCaller \
+    -R $REF \
+    -I ${PREFIX}/$PREFIX.grouped.bam \
+    -O ${PREFIX}/$PREFIX.vcf
+    
+gatk --java-options "-Xmx4G" VariantFiltration \
+	-R $REF \
+	-V ${PREFIX}/$PREFIX.vcf \
+	-O ${PREFIX}/$PREFIX.filt1.vcf \
+	--filter-name "LowConf" \
+	--filter-expression "DP < 10 || MQ < 40.0 || QD < 2.0 || FS > 60.0 || ABHom < 0.9"
+awk 'BEGIN { FS = ":" } ;  $8 > 50' ${PREFIX}/$PREFIX.filt1.vcf  > ${PREFIX}/$PREFIX.filt2.vcf 
+awk 'BEGIN{FS=OFS="\t"} $7=="LowConf"{gsub(/[[:alnum:]]|*/,"N",$5)} 1' ${PREFIX}/$PREFIX.filt2.vcf > ${PREFIX}/$PREFIX.filt3.vcf
+grep -v LowConf ${PREFIX}/$PREFIX.filt3.vcf > ${PREFIX}/$PREFIX.finalfilt.vcf
+
+
+### ASSEMBLE ###
+conda activate spades_env
+mkdir ${PREFIX}/spades/
+spades.py -1 ${PREFIX}/${PREFIX}_1_qc.fastq -2 ${PREFIX}/${PREFIX}_2_qc.fastq -o ${PREFIX}/spades/ -t $NSLOTS --careful
+
