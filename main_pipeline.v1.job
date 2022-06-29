@@ -1,7 +1,7 @@
 #!/bin/bash --login
 #$ -cwd
 #$ -pe smp.pe 6 
-#$ -t 1-1
+#$ -t 1-267
 #$ -N zpipe
 module load apps/binapps/anaconda3/2021.11
 module load tools/env/proxy2 
@@ -17,7 +17,6 @@ PREFIX=`awk "NR==$SGE_TASK_ID" found.list`
 READ1=./initial_seq/${PREFIX}_1.fastq
 READ2=./initial_seq/${PREFIX}_2.fastq
 
-:<< 'END'
 
 mkdir $PREFIX
 
@@ -38,60 +37,55 @@ alignREF() {
 	then
 		bwa index $REF
 	fi
-	bwa mem -t $NSLOTS $REF ${PREFIX}/${PREFIX}_1_qc.fastq ${PREFIX}/${PREFIX}_2_qc.fastq > ${PREFIX}/$PREFIX.${REF}_${PREFIX}.sam
+	bwa mem -t $NSLOTS $REF ${PREFIX}/${PREFIX}_1_qc.fastq ${PREFIX}/${PREFIX}_2_qc.fastq > ${PREFIX}/$PREFIX.$REF_PREFIX.sam
 
 	### VARIANT CALL ###
 	# Convert SAM to BAM
-	samtools view -S -b ${PREFIX}/$PREFIX.${REF}_${PREFIX}.sam > ${PREFIX}/$PREFIX.${REF}_${PREFIX}.bam
+	samtools view -S -b ${PREFIX}/$PREFIX.$REF_PREFIX.sam > ${PREFIX}/$PREFIX.$REF_PREFIX.bam
 	# Sort BAM file
-	samtools sort ${PREFIX}/$PREFIX.${REF}_${PREFIX}.bam -o ${PREFIX}/$PREFIX.${REF}_${PREFIX}.sorted.bam
+	samtools sort ${PREFIX}/$PREFIX.$REF_PREFIX.bam -o ${PREFIX}/$PREFIX.$REF_PREFIX.sorted.bam
 
 	### ALIGNMENT QC ###
 	# Picard - Duplicated reads
 	module load apps/picard/2.1.0/bin
-	java -jar picard.jar MarkDuplicates \
-      I=${PREFIX}/$PREFIX.${REF}_${PREFIX}.sorted.bam \
-      O=${PREFIX}/$PREFIX.${REF}_${PREFIX}.marked_duplicates.bam \
-      M=${PREFIX}/$PREFIX.${REF}_${PREFIX}.marked_dup_metrics.txt
+	picard MarkDuplicates I=${PREFIX}/$PREFIX.$REF_PREFIX.sorted.bam O=${PREFIX}/$PREFIX.$REF_PREFIX.marked_duplicates.bam M=${PREFIX}/$PREFIX.$REF_PREFIX.marked_dup_metrics.txt
 
 
   	# QualiMap - GC content and coverage
   	module load apps/gcc/R/4.1.2 
-  	mkdir qualimap_$REF
-  	/mnt/iusers01/pb01/f99731hc/qualimap_v2.2.1/qualimap bamqc -bam $PREFIX.${REF}_${PREFIX}.sorted.bam -outdir qualimap_$REF
-
-
+  	mkdir ./$PREFIX/qualimap_$REF_PREFIX
+  	/mnt/iusers01/pb01/f99731hc/qualimap_v2.2.1/qualimap bamqc -nt $NSLOTS -bam ./$PREFIX/$PREFIX.$REF_PREFIX.sorted.bam -outdir ./$PREFIX/qualimap_$REF_PREFIX
 
 
 
 	### VARIANT CALL ###
 	# Add groups for sorted BAM file
 	gatk --java-options "-Xmx4G" AddOrReplaceReadGroups \
-	       -I ${PREFIX}/$PREFIX.${REF}_${PREFIX}.sorted.bam \
-	       -O ${PREFIX}/$PREFIX.${REF}_${PREFIX}.grouped.bam \
+	       -I ${PREFIX}/$PREFIX.$REF_PREFIX.sorted.bam \
+	       -O ${PREFIX}/$PREFIX.$REF_PREFIX.grouped.bam \
 	       --RGID 4 \
 	       --RGLB lib1 \
 	       --RGPL ILLUMINA \
 	       --RGPU unit1 \
 	       --RGSM 20
 	# Index the sorted BAM file
-	samtools index ${PREFIX}/$PREFIX.${REF}_${PREFIX}.grouped.bam
+	samtools index ${PREFIX}/$PREFIX.$REF_PREFIX.grouped.bam
 
 	# Run GATK
 	gatk --java-options "-Xmx4G" HaplotypeCaller \
 	    -R $REF \
-	    -I ${PREFIX}/$PREFIX.${REF}_${PREFIX}.grouped.bam \
-	    -O ${PREFIX}/$PREFIX.${REF}_${PREFIX}.vcf
+	    -I ${PREFIX}/$PREFIX.$REF_PREFIX.grouped.bam \
+	    -O ${PREFIX}/$PREFIX.$REF_PREFIX.vcf
 	    
 	gatk --java-options "-Xmx4G" VariantFiltration \
 		-R $REF \
-		-V ${PREFIX}/$PREFIX.${REF}_${PREFIX}.vcf \
-		-O ${PREFIX}/$PREFIX.filt1.${REF}_${PREFIX}.vcf \
+		-V ${PREFIX}/$PREFIX.$REF_PREFIX.vcf \
+		-O ${PREFIX}/$PREFIX.filt1.$REF_PREFIX.vcf \
 		--filter-name "LowConf" \
 		--filter-expression "DP < 10 || MQ < 40.0 || QD < 2.0 || FS > 60.0 || ABHom < 0.9"
-	awk 'BEGIN { FS = ":" } ;  $8 > 50' ${PREFIX}/$PREFIX.filt1.${REF}_${PREFIX}.vcf  > ${PREFIX}/$PREFIX.filt2.${REF}_${PREFIX}.vcf 
-	awk 'BEGIN{FS=OFS="\t"} $7=="LowConf"{gsub(/[[:alnum:]]|*/,"N",$5)} 1' ${PREFIX}/$PREFIX.filt2.${REF}_${PREFIX}.vcf > ${PREFIX}/$PREFIX.filt3.${REF}_${PREFIX}.vcf
-	grep -v LowConf ${PREFIX}/$PREFIX.filt3.${REF}_${PREFIX}.vcf > ${PREFIX}/$PREFIX.finalfilt.${REF}_${PREFIX}.vcf
+	awk 'BEGIN { FS = ":" } ;  $8 > 50' ${PREFIX}/$PREFIX.filt1.$REF_PREFIX.vcf  > ${PREFIX}/$PREFIX.filt2.$REF_PREFIX.vcf 
+	awk 'BEGIN{FS=OFS="\t"} $7=="LowConf"{gsub(/[[:alnum:]]|*/,"N",$5)} 1' ${PREFIX}/$PREFIX.filt2.$REF_PREFIX.vcf > ${PREFIX}/$PREFIX.filt3.$REF_PREFIX.vcf
+	grep -v LowConf ${PREFIX}/$PREFIX.filt3.$REF_PREFIX.vcf > ${PREFIX}/$PREFIX.finalfilt.$REF_PREFIX.vcf
 
 
 
@@ -104,7 +98,7 @@ alignREF
 REF=CEA10PILON3.fasta
 REF_PREFIX=cea10
 alignREF
-
+: <<'END'
 ### ASSEMBLE ###
 conda activate spades_env
 mkdir ${PREFIX}/spades/
@@ -131,10 +125,10 @@ samtools index ${PREFIX}/$PREFIX.self.sorted.bam
 conda activate pilon_env
 mkdir ${PREFIX}/pilon/
 pilon --genome ${PREFIX}/spades/contigs.fasta --frags ${PREFIX}/$PREFIX.self.sorted.bam -Xmx4g --output $PREFIX --outdir ${PREFIX}/pilon/ --threads $NSLOTS --changes
-END
+
 ### SCAFFOLD ###
-#conda activate ragtag_env
-#ragtag.py scaffold CEA10PILON3.fasta ${PREFIX}/pilon/${PREFIX}.fasta -o ${PREFIX}/ragtag -w
+conda activate ragtag_env
+ragtag.py scaffold CEA10PILON3.fasta ${PREFIX}/pilon/${PREFIX}.fasta -o ${PREFIX}/ragtag -w
 
 ### ASSEMBLY QC ###
 # BBtools - general stats
@@ -142,7 +136,7 @@ END
 #stats.sh ragtag.fasta
 
 # QUAST
-
+END
 ### 
 
 
