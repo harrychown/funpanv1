@@ -2,7 +2,7 @@
 #$ -cwd
 #$ -pe smp.pe 6 
 #$ -t 1-267
-#$ -N zpipe
+#$ -N zamelia
 module load apps/binapps/anaconda3/2021.11
 module load tools/env/proxy2 
 module load apps/bioinf

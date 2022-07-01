@@ -1,21 +1,22 @@
 #!/bin/bash --login
 #$ -cwd
 #$ -pe smp.pe 6 
-#$ -t 1-267
-#$ -N zpipe
+#$ -t 1-1
+#$ -N zglobal
 module load apps/binapps/anaconda3/2021.11
 module load tools/env/proxy2 
 module load apps/bioinf
 module load apps/binapps/gatk/4.1.8.0
 module load apps/samtools/1.4/gcc-4.8.5
 module load apps/gcc/R/4.1.2 
-# 1-267
+# 1-1124
 
-PREFIX=`awk "NR==$SGE_TASK_ID" found.list`
+PREFIX=`awk "NR==$SGE_TASK_ID" data.list`
 
 ### PANGENOME GENERATION PIPELINE FOR HPC ###
-READ1=./initial_seq/${PREFIX}_1.fastq
-READ2=./initial_seq/${PREFIX}_2.fastq
+READ1=../clean_data/${PREFIX}_1.fastq
+READ2=../clean_data/${PREFIX}_2.fastq
+
 
 
 mkdir $PREFIX
