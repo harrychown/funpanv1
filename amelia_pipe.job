@@ -56,11 +56,15 @@ alignREF() {
   	mkdir ./$PREFIX/qualimap_$REF_PREFIX
   	/mnt/iusers01/pb01/f99731hc/qualimap_v2.2.1/qualimap bamqc -nt $NSLOTS -bam ./$PREFIX/$PREFIX.$REF_PREFIX.sorted.bam -outdir ./$PREFIX/qualimap_$REF_PREFIX
 
-  	# Check if dictionary needs to be generated
-  	if [ ! -e $REF.dict ]
+  
+ 	# Check if dictionary needs to be generated
+	DICT_PREFIX=$(echo $REF | rev | cut -d"." | rev)
+  	if [ ! -e $DICT_PREFIX.dict ]
 	then
-		picard CreateSequenceDictionary R=$REF O=$REF.dict 
+		picard CreateSequenceDictionary R=$REF O=$DICT_PREFIX.dict 
 	fi
+
+
 
 	# Check if FASTA index needs to be generated
   	if [ ! -e $REF.fai ]

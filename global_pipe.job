@@ -2,14 +2,14 @@
 #$ -cwd
 #$ -pe smp.pe 6 
 #$ -t 1-1
-#$ -N zglobal
+#$ -N zdemo
 module load apps/binapps/anaconda3/2021.11
 module load tools/env/proxy2 
 module load apps/bioinf
 module load apps/binapps/gatk/4.1.8.0
 module load apps/samtools/1.4/gcc-4.8.5
 module load apps/gcc/R/4.1.2 
-# 1-1124
+# 1-1137
 
 PREFIX=`awk "NR==$SGE_TASK_ID" data.list`
 
@@ -18,11 +18,12 @@ READ1=../clean_data/${PREFIX}_1.fastq
 READ2=../clean_data/${PREFIX}_2.fastq
 
 
-
+: <<'END'
 mkdir $PREFIX
 
 ### READ QC ###
 conda activate imperial
+export OMP_NUM_THREADS=$NSLOTS
 trimmomatic PE -threads $NSLOTS ./${READ1} ./${READ2} \
 		${PREFIX}/${PREFIX}_1_qc.fastq ${PREFIX}/${PREFIX}_1_unqc.fastq \
 		${PREFIX}/${PREFIX}_2_qc.fastq ${PREFIX}/${PREFIX}_2_unqc.fastq \
@@ -34,6 +35,7 @@ trimmomatic PE -threads $NSLOTS ./${READ1} ./${READ2} \
 # Function to align reference
 alignREF() {
 	conda activate persist_env
+	export OMP_NUM_THREADS=$NSLOTS
 	if [ ! -e $REF.pac ]
 	then
 		bwa index $REF
@@ -42,9 +44,9 @@ alignREF() {
 
 	### VARIANT CALL ###
 	# Convert SAM to BAM
-	samtools view -S -b ${PREFIX}/$PREFIX.$REF_PREFIX.sam > ${PREFIX}/$PREFIX.$REF_PREFIX.bam
+	samtools view -@ $NSLOTS -S -b ${PREFIX}/$PREFIX.$REF_PREFIX.sam > ${PREFIX}/$PREFIX.$REF_PREFIX.bam
 	# Sort BAM file
-	samtools sort ${PREFIX}/$PREFIX.$REF_PREFIX.bam -o ${PREFIX}/$PREFIX.$REF_PREFIX.sorted.bam
+	samtools sort -@ $NSLOTS ${PREFIX}/$PREFIX.$REF_PREFIX.bam -o ${PREFIX}/$PREFIX.$REF_PREFIX.sorted.bam
 
 	### ALIGNMENT QC ###
 	# Picard - Duplicated reads
@@ -57,11 +59,15 @@ alignREF() {
   	mkdir ./$PREFIX/qualimap_$REF_PREFIX
   	/mnt/iusers01/pb01/f99731hc/qualimap_v2.2.1/qualimap bamqc -nt $NSLOTS -bam ./$PREFIX/$PREFIX.$REF_PREFIX.sorted.bam -outdir ./$PREFIX/qualimap_$REF_PREFIX
 
-  	# Check if dictionary needs to be generated
-  	if [ ! -e $REF.dict ]
+  
+ 	# Check if dictionary needs to be generated
+	DICT_PREFIX=$(echo $REF | rev | cut -d"." -f1 | rev)
+  	if [ ! -e $DICT_PREFIX.dict ]
 	then
-		picard CreateSequenceDictionary R=$REF O=$REF.dict 
+		picard CreateSequenceDictionary R=$REF O=$DICT_PREFIX.dict 
 	fi
+
+
 
 	# Check if FASTA index needs to be generated
   	if [ ! -e $REF.fai ]
@@ -80,13 +86,13 @@ alignREF() {
 	       --RGPU unit1 \
 	       --RGSM 20
 	# Index the sorted BAM file
-	samtools index ${PREFIX}/$PREFIX.$REF_PREFIX.grouped.bam
+	samtools index -@ $NSLOTS ${PREFIX}/$PREFIX.$REF_PREFIX.grouped.bam
 
 	# Run GATK
 	gatk --java-options "-Xmx4G" HaplotypeCaller \
 	    -R $REF \
 	    -I ${PREFIX}/$PREFIX.$REF_PREFIX.grouped.bam \
-	    -O ${PREFIX}/$PREFIX.$REF_PREFIX.vcf
+	    -O ${PREFIX}/$PREFIX.$REF_PREFIX.vcf -ploidy 1
 	    
 	gatk --java-options "-Xmx4G" VariantFiltration \
 		-R $REF \
@@ -106,18 +112,21 @@ REF=GCF_000002655.1_ASM265v1_genomic.masked.fa
 REF_PREFIX=af293
 alignREF
 
-REF=CEA10PILON3.fasta
-REF_PREFIX=cea10
+REF=norm_CEA10PILON3.fasta
+REF_PREFIX=norm_cea10
 alignREF
-: <<'END'
+
+
 ### ASSEMBLE ###
 conda activate spades_env
+export OMP_NUM_THREADS=$NSLOTS
 mkdir ${PREFIX}/spades/
-spades.py -1 ${PREFIX}/${PREFIX}_1_qc.fastq -2 ${PREFIX}/${PREFIX}_2_qc.fastq -o ${PREFIX}/spades/ -t $NSLOTS --careful
+spades.py -1 ${PREFIX}/${PREFIX}_1_qc.fastq -2 ${PREFIX}/${PREFIX}_2_qc.fastq -o ${PREFIX}/spades/ --threads $NSLOTS --careful
 
 
 ### ALIGN TO SELF ###
 conda activate persist_env
+export OMP_NUM_THREADS=$NSLOTS
 REF="${PREFIX}/spades/contigs.fasta" 
 if [ ! -e $REF.pac ]
 then
@@ -125,29 +134,55 @@ then
 fi
 bwa mem -t $NSLOTS $REF ${PREFIX}/${PREFIX}_1_qc.fastq ${PREFIX}/${PREFIX}_2_qc.fastq > ${PREFIX}/$PREFIX.self.sam
 # Convert SAM to BAM
-samtools view -S -b ${PREFIX}/$PREFIX.self.sam > ${PREFIX}/$PREFIX.self.bam
+samtools view -@ $NSLOTS -S -b ${PREFIX}/$PREFIX.self.sam > ${PREFIX}/$PREFIX.self.bam
 # Sort BAM file
-samtools sort ${PREFIX}/$PREFIX.self.bam -o ${PREFIX}/$PREFIX.self.sorted.bam
+samtools sort -@ $NSLOTS ${PREFIX}/$PREFIX.self.bam -o ${PREFIX}/$PREFIX.self.sorted.bam
+samtools index -@ $NSLOTS ${PREFIX}/$PREFIX.self.sorted.bam 
 
-
-samtools index ${PREFIX}/$PREFIX.self.sorted.bam 
 
 ### POLISH ###
 conda activate pilon_env
+export OMP_NUM_THREADS=$NSLOTS
 mkdir ${PREFIX}/pilon/
 pilon --genome ${PREFIX}/spades/contigs.fasta --frags ${PREFIX}/$PREFIX.self.sorted.bam -Xmx4g --output $PREFIX --outdir ${PREFIX}/pilon/ --threads $NSLOTS --changes
 
+
 ### SCAFFOLD ###
 conda activate ragtag_env
-ragtag.py scaffold CEA10PILON3.fasta ${PREFIX}/pilon/${PREFIX}.fasta -o ${PREFIX}/ragtag -w
+export OMP_NUM_THREADS=$NSLOTS
+ragtag.py scaffold CEA10PILON3.fasta ${PREFIX}/pilon/${PREFIX}.fasta -o ${PREFIX}/ragtag -w -t $NSLOTS 
+
 
 ### ASSEMBLY QC ###
+# Run three times for each assembly step (spades, pilon, ragtag)
 # BBtools - general stats
-#conda activate bbtools
-#stats.sh ragtag.fasta
-
-# QUAST
+conda activate bbtools
+export OMP_NUM_THREADS=$NSLOTS
+stats.sh ${PREFIX}/ragtag/ragtag.scaffold.fasta format=2 | grep ":" | cut -d$'\t' -f2 | sed 's/.*\///g' | sed 's/%//g' > ${PREFIX}/ragtag.stats
+# Qualimap - avg. coverage
+grep "mean coverageData" ./$PREFIX/qualimap_$REF_PREFIX/genome_results.txt | cut -d"=" -f2 | sed 's/ //g' | sed 's/X//g' >> ${PREFIX}/ragtag.stats
+# BUSCO completeness
+conda activate busco_env
+export OMP_NUM_THREADS=$NSLOTS
+busco -m genome -i ${PREFIX}/ragtag/ragtag.scaffold.fasta -o ${PREFIX}/ragtag.busco -l eurotiales_odb10 --offline --download_path /mnt/iusers01/pb01/f99731hc/busco_downloads -f -c $NSLOTS
+cat ${PREFIX}/ragtag.busco/short_summary.specific.eurotiales_odb10.ragtag.busco.txt | grep -P 'C:.*%' | cut -d"%" -f1 | sed 's/.*C://g' >> ${PREFIX}/ragtag.stats
 END
-### 
+
+### GENE PREDICTION ###
+# Genemark-ES
+mkdir ${PREFIX}/genemark_es
+conda activate prothint_env
+export OMP_NUM_THREADS=$NSLOTS
+export PATH="/mnt/iusers01/pb01/f99731hc/ProtHint/dependencies/GeneMarkES/gmes_linux_64/:$PATH"
+gmes_petap.pl --ES --soft_mask auto --cores $NSLOTS --max_intron 3200 --max_intergenic 56000 --min_contig=10000 --min_contig_in_predict=500 --fungus --work_dir ${PREFIX}/genemark_es --sequence ${PREFIX}/ragtag/ragtag.scaffold.fasta
+
+# Prothint 
+mkdir ${PREFIX}/prothint
+python ~/ProtHint/bin/prothint.py --workdir ${PREFIX}/prothint  --threads $NSLOTS --fungus ${PREFIX}/ragtag/ragtag.scaffold.fasta /mnt/iusers01/pb01/f99731hc/scratch/proteins.fasta
+
+# Genemark-EP
+mkdir ${PREFIX}/genemark_ep
+gmes_petap.pl --EP ${PREFIX}/prothint/prothint.gff --evidence ${PREFIX}/prothint/evidence.gff  --soft_mask auto --cores $NSLOTS --max_intron 3200 --max_intergenic 56000 --min_contig=10000 --min_contig_in_predict=500 --fungus --work_dir ${PREFIX}/genemark_ep  --sequence ${PREFIX}/ragtag/ragtag.scaffold.fasta
+
 
 

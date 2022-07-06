@@ -1,0 +1,14 @@
+Main genome scaffold total:         	379
+Main genome contig total:           	814
+Main genome scaffold sequence total:	28345392
+Main genome contig sequence total:  	28301892  	
+Main genome scaffold N/L50:         	3752997
+Main genome contig N/L50:           	151845
+Main genome scaffold N/L90:         	1982789
+Main genome contig N/L90:           	41252
+Max scaffold length:                	4952006
+Max contig length:                  	583156
+Number of scaffolds > 50 KB:        	9
+% main genome in scaffolds > 50 KB: 	99.47
+Mean reference coverage:		21.57
+BUSCO completeness:			95.5
